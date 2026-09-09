@@ -1,0 +1,146 @@
+services:
+  openclaw-init:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    user: "0:0"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+    volumes:
+      - openclaw-data:/home/node/.openclaw
+      - openclaw-auth:/home/node/.config/openclaw
+    entrypoint: ["node", "-e"]
+    command:
+      - |
+        const fs = require("fs");
+        const token = process.env.OPENCLAW_GATEWAY_TOKEN || "";
+        const dirs = [
+          "/home/node/.openclaw",
+          "/home/node/.openclaw/workspace",
+          "/home/node/.openclaw/identity",
+          "/home/node/.openclaw/credentials",
+          "/home/node/.config/openclaw",
+        ];
+        for (const dir of dirs) fs.mkdirSync(dir, { recursive: true });
+        const configPath = "/home/node/.openclaw/openclaw.json";
+        if (!fs.existsSync(configPath)) {
+          const config = {
+            gateway: {
+              mode: "local",
+              port: 18789,
+              bind: "lan",
+              auth: { mode: "token", token },
+              controlUi: {
+                enabled: true,
+                allowedOrigins: [
+                  "http://localhost:18789",
+                  "http://127.0.0.1:18789",
+                ],
+                allowInsecureAuth: true,
+              },
+            },
+          };
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        }
+        const { spawnSync } = require("child_process");
+        spawnSync("chown", ["-R", "1000:1000", "/home/node/.openclaw", "/home/node/.config/openclaw"], { stdio: "inherit" });
+    restart: "no"
+
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    container_name: openclaw-gateway
+    depends_on:
+      openclaw-init:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_TZ:-America/Sao_Paulo}
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - openclaw-data:/home/node/.openclaw
+      - openclaw-auth:/home/node/.config/openclaw
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+        "--allow-unconfigured",
+      ]
+    healthcheck:
+      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    network_mode: "service:openclaw-gateway"
+    profiles: ["cli"]
+    env_file:
+      - path: .env
+        required: false
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_TZ:-America/Sao_Paulo}
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      BROWSER: echo
+    volumes:
+      - openclaw-data:/home/node/.openclaw
+      - openclaw-auth:/home/node/.config/openclaw
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]
+    depends_on:
+      - openclaw-gateway
+
+volumes:
+  openclaw-data:
+  openclaw-auth:
